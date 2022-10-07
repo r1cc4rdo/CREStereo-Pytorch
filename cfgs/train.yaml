@@ -1,9 +1,14 @@
-seed: 0
+gpus: "4,5,6,7"
+batch_size: 12
+workers: 20
+
 mixed_precision: false
 base_lr: 4.0e-4
 # base_lr: 4.0e-2
 
-batch_size: 12
+training_data_path: "/remote/mmg01/scratch/data/CREStereo/debug_subset/crestereo"
+# training_data_path: "/remote/mmg01/scratch/data/CREStereo/stereo_trainset/crestereo"
+
 n_total_epoch: 600
 minibatch_per_epoch: 500
 
@@ -11,11 +16,9 @@ loadmodel: ~
 log_dir: "./train_log"
 model_save_freq_epoch: 1
 
+seed: 0
 max_disp: 256
 image_width: 512
 image_height: 384
-training_data_path: "/remote/mmg01/scratch/data/CREStereo/debug_subset/crestereo"
-# training_data_path: "/remote/mmg01/scratch/data/CREStereo/stereo_trainset/crestereo"
 
 log_level: "logging.INFO"
-

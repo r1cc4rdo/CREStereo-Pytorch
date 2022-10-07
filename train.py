@@ -1,7 +1,4 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
-
 import sys
 import time
 import logging
@@ -18,6 +15,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+from torchinfo import summary
 
 def parse_yaml(file_path: str) -> namedtuple:
     """Parse yaml configuration file and return the object in `namedtuple`."""
@@ -77,6 +75,9 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8):
 
 
 def main(args):
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
+
     # initial info
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
@@ -88,9 +89,9 @@ def main(args):
     ensure_dir(log_model_dir)
 
     # model / optimizer
-    model = Model(
-        max_disp=args.max_disp, mixed_precision=args.mixed_precision, test_mode=False
-    )
+    model = Model(max_disp=args.max_disp, mixed_precision=args.mixed_precision, test_mode=False)
+    # summary(model, input_size=((args.batch_size, 3, args.image_height, args.image_width), )*2)
+
     model = nn.DataParallel(model,device_ids=[i for i in range(world_size)])
     model.cuda()
     optimizer = optim.Adam(model.parameters(), lr=0.1, betas=(0.9, 0.999))
@@ -145,8 +146,8 @@ def main(args):
     dataset = CREStereoDataset(args.training_data_path)
     # if rank == 0:
     worklog.info(f"Dataset size: {len(dataset)}")
-    dataloader = DataLoader(dataset, args.batch_size, shuffle=True,
-                            num_workers=0, drop_last=True, persistent_workers=False, pin_memory=True)
+    dataloader = DataLoader(dataset, args.batch_size, shuffle=True, num_workers=args.workers,
+                            drop_last=True, persistent_workers=False, pin_memory=True)
 
     # counter
     cur_iters = start_iters
@@ -189,9 +190,7 @@ def main(args):
             flow_predictions = model(left.cuda(), right.cuda())
 
             # loss & backword
-            loss = sequence_loss(
-                flow_predictions, gt_flow, valid_mask, gamma=0.8
-            )
+            loss = sequence_loss(flow_predictions, gt_flow, valid_mask, gamma=0.8)
 
             # loss stats
             loss_item = loss.data.item()
