@@ -73,10 +73,9 @@ if __name__ == '__main__':
 	disp_vis = cv2.applyColorMap(disp_vis, cv2.COLORMAP_INFERNO)
 
 	combined_img = np.hstack((left_img, disp_vis))
-	cv2.namedWindow("output", cv2.WINDOW_NORMAL)
-	cv2.imshow("output", combined_img)
+	# cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+	# cv2.imshow("output", combined_img)
 	cv2.imwrite("output.jpg", disp_vis)
-	cv2.waitKey(0)
-
-
+	# cv2.waitKey(0)
+	print('All done!')
 

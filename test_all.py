@@ -1,6 +1,6 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 
 import sys
 import time
@@ -10,13 +10,19 @@ from collections import namedtuple
 import yaml
 from tensorboardX import SummaryWriter
 
-from nets import Model
+from nets.lookma import LookMaNoFeatures as Model
 from dataset import CREStereoDataset
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+
+from torchinfo import summary
+
+import tqdm
+import numpy as np
+from matplotlib import pyplot as plot
 
 
 def parse_yaml(file_path: str) -> namedtuple:
@@ -88,12 +94,12 @@ def main(args):
     ensure_dir(log_model_dir)
 
     # model / optimizer
-    model = Model(
-        max_disp=args.max_disp, mixed_precision=args.mixed_precision, test_mode=False
-    )
-    model = nn.DataParallel(model,device_ids=[i for i in range(world_size)])
+    model = Model(mixed_precision=args.mixed_precision)
+    # summary(model, input_size=((args.batch_size, 3, args.image_height, args.image_width), )*2)
+
+    model = nn.DataParallel(model, device_ids=[i for i in range(world_size)])
     model.cuda()
-    optimizer = optim.Adam(model.parameters(), lr=0.1, betas=(0.9, 0.999))
+    # optimizer = optim.Adam(model.parameters(), lr=0.1, betas=(0.9, 0.999))
     # model = nn.DataParallel(model,device_ids=[0])
 
     tb_log = SummaryWriter(os.path.join(args.log_dir, "train.events"))
@@ -130,22 +136,16 @@ def main(args):
     if chk_path is not None:
         # if rank == 0:
         worklog.info(f"loading model: {chk_path}")
-        state_dict = torch.load(chk_path)
-        model.load_state_dict(state_dict['state_dict'])
-        optimizer.load_state_dict(state_dict['optim_state_dict'])
-        resume_epoch_idx = state_dict["epoch"]
-        resume_iters = state_dict["iters"]
-        start_epoch_idx = resume_epoch_idx + 1
-        start_iters = resume_iters
-    else:
-        start_epoch_idx = 1
-        start_iters = 0
+        model.load_state_dict(torch.load(chk_path)['state_dict'], strict=True)
+
+    start_epoch_idx = 1
+    start_iters = 0
 
     # datasets
     dataset = CREStereoDataset(args.training_data_path)
     # if rank == 0:
     worklog.info(f"Dataset size: {len(dataset)}")
-    dataloader = DataLoader(dataset, args.batch_size, shuffle=True,
+    dataloader = DataLoader(dataset, 1, shuffle=True,
                             num_workers=0, drop_last=True, persistent_workers=False, pin_memory=True)
 
     # counter
@@ -156,14 +156,14 @@ def main(args):
 
         # adjust learning rate
         epoch_total_train_loss = 0
-        adjust_learning_rate(optimizer, epoch_idx)
-        model.train()
+        # adjust_learning_rate(optimizer, epoch_idx)
+        model.eval()
 
-        t1 = time.perf_counter()
+        # t1 = time.perf_counter()
         # batch_idx = 0
 
         # for mini_batch_data in dataloader:
-        for batch_idx, mini_batch_data in enumerate(dataloader):
+        for batch_idx, mini_batch_data in tqdm.tqdm(enumerate(dataloader)):
 
             if batch_idx % args.minibatch_per_epoch == 0 and batch_idx != 0:
                 break
@@ -179,94 +179,93 @@ def main(args):
             )
 
             t2 = time.perf_counter()
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
 
             # pre-process
-            gt_disp = torch.unsqueeze(gt_disp, dim=1)  # [2, 384, 512] -> [2, 1, 384, 512]
-            gt_flow = torch.cat([gt_disp, gt_disp * 0], dim=1)  # [2, 2, 384, 512]
+            # gt_disp = torch.unsqueeze(gt_disp, dim=1)  # [B, 384, 512] -> [B, 1, 384, 512]
 
             # forward
-            flow_predictions = model(left.cuda(), right.cuda())
+            with torch.inference_mode():
+                predictions = model(left.cuda(), right.cuda())
+                np.save(f'{batch_idx:08d}.npy', predictions.cpu().numpy())
 
             # loss & backword
-            loss = sequence_loss(
-                flow_predictions, gt_flow, valid_mask, gamma=0.8
-            )
+            # loss = torch.nn.functional.smooth_l1_loss(predictions, gt_disp)
 
             # loss stats
-            loss_item = loss.data.item()
-            epoch_total_train_loss += loss_item
-            loss.backward()
-            optimizer.step()
-            t3 = time.perf_counter()
-
-            if cur_iters % 10 == 0:
-                tdata = t2 - t1
-                time_train_passed = t3 - t0
-                time_iter_passed = t3 - t1
-                step_passed = cur_iters - start_iters
-                eta = (
-                    (total_iters - cur_iters)
-                    / max(step_passed, 1e-7)
-                    * time_train_passed
-                )
-
-                meta_info = list()
-                meta_info.append("{:.2g} b/s".format(1.0 / time_iter_passed))
-                meta_info.append("passed:{}".format(format_time(time_train_passed)))
-                meta_info.append("eta:{}".format(format_time(eta)))
-                meta_info.append(
-                    "data_time:{:.2g}".format(tdata / time_iter_passed)
-                )
-
-                meta_info.append(
-                    "lr:{:.5g}".format(optimizer.param_groups[0]["lr"])
-                )
-                meta_info.append(
-                    "[{}/{}:{}/{}]".format(
-                        epoch_idx,
-                        args.n_total_epoch,
-                        batch_idx,
-                        args.minibatch_per_epoch,
-                    )
-                )
-                loss_info = [" ==> {}:{:.4g}".format("loss", loss_item)]
-                # exp_name = ['\n' + os.path.basename(os.getcwd())]
-
-                info = [",".join(meta_info)] + loss_info
-                worklog.info("".join(info))
-
-                # minibatch loss
-                tb_log.add_scalar("train/loss_batch", loss_item, cur_iters)
-                tb_log.add_scalar(
-                    "train/lr", optimizer.param_groups[0]["lr"], cur_iters
-                )
-                tb_log.flush()
-
-            t1 = time.perf_counter()
-
-        tb_log.add_scalar(
-            "train/loss",
-            epoch_total_train_loss / args.minibatch_per_epoch,
-            epoch_idx,
-        )
-        tb_log.flush()
-
-        # save model params
-        ckp_data = {
-            "epoch": epoch_idx,
-            "iters": cur_iters,
-            "batch_size": args.batch_size,
-            "epoch_size": args.minibatch_per_epoch,
-            "train_loss": epoch_total_train_loss / args.minibatch_per_epoch,
-            "state_dict": model.state_dict(),
-            "optim_state_dict": optimizer.state_dict(),
-        }
-        torch.save(ckp_data, os.path.join(log_model_dir, "latest.pth"))
-        if epoch_idx % args.model_save_freq_epoch == 0:
-            save_path = os.path.join(log_model_dir, "epoch-%d.pth" % epoch_idx)
-            worklog.info(f"Model params saved: {save_path}")
-            torch.save(ckp_data, save_path)
+        #     loss_item = loss.data.item()
+        #     epoch_total_train_loss += loss_item
+        #     loss.backward()
+        #     optimizer.step()
+        #     t3 = time.perf_counter()
+        #
+        #     if cur_iters % 10 == 0:
+        #         tdata = t2 - t1
+        #         time_train_passed = t3 - t0
+        #         time_iter_passed = t3 - t1
+        #         step_passed = cur_iters - start_iters
+        #         eta = (
+        #             (total_iters - cur_iters)
+        #             / max(step_passed, 1e-7)
+        #             * time_train_passed
+        #         )
+        #
+        #         meta_info = list()
+        #         meta_info.append("{:.2g} b/s".format(1.0 / time_iter_passed))
+        #         meta_info.append("passed:{}".format(format_time(time_train_passed)))
+        #         meta_info.append("eta:{}".format(format_time(eta)))
+        #         meta_info.append(
+        #             "data_time:{:.2g}".format(tdata / time_iter_passed)
+        #         )
+        #
+        #         meta_info.append(
+        #             "lr:{:.5g}".format(optimizer.param_groups[0]["lr"])
+        #         )
+        #         meta_info.append(
+        #             "[{}/{}:{}/{}]".format(
+        #                 epoch_idx,
+        #                 args.n_total_epoch,
+        #                 batch_idx,
+        #                 args.minibatch_per_epoch,
+        #             )
+        #         )
+        #         loss_info = [" ==> {}:{:.4g}".format("loss", loss_item)]
+        #         # exp_name = ['\n' + os.path.basename(os.getcwd())]
+        #
+        #         info = [",".join(meta_info)] + loss_info
+        #         worklog.info("".join(info))
+        #
+        #         # minibatch loss
+        #         tb_log.add_scalar("train/loss_batch", loss_item, cur_iters)
+        #         tb_log.add_scalar(
+        #             "train/lr", optimizer.param_groups[0]["lr"], cur_iters
+        #         )
+        #         tb_log.flush()
+        #
+        #     t1 = time.perf_counter()
+        #
+        # tb_log.add_scalar(
+        #     "train/loss",
+        #     epoch_total_train_loss / args.minibatch_per_epoch,
+        #     epoch_idx,
+        # )
+        # tb_log.flush()
+        #
+        # # save model params
+        # ckp_data = {
+        #     "epoch": epoch_idx,
+        #     "iters": cur_iters,
+        #     "batch_size": args.batch_size,
+        #     "epoch_size": args.minibatch_per_epoch,
+        #     "train_loss": epoch_total_train_loss / args.minibatch_per_epoch,
+        #     "state_dict": model.state_dict(),
+        #     "optim_state_dict": optimizer.state_dict(),
+        # }
+        # torch.save(ckp_data, os.path.join(log_model_dir, "latest.pth"))
+        # if epoch_idx % args.model_save_freq_epoch == 0:
+        #     save_path = os.path.join(log_model_dir, "epoch-%d.pth" % epoch_idx)
+        #     worklog.info(f"Model params saved: {save_path}")
+        #     torch.save(ckp_data, save_path)
 
     worklog.info("Training is done, exit.")
 

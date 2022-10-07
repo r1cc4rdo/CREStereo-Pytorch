@@ -1,3 +1,8 @@
+.idea
+results
+models
+output.jpg
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

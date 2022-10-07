@@ -3,7 +3,7 @@ mixed_precision: false
 base_lr: 4.0e-4
 # base_lr: 4.0e-2
 
-batch_size: 12
+batch_size: 24
 n_total_epoch: 600
 minibatch_per_epoch: 500
 

@@ -1,10 +1,12 @@
 import os
 import cv2
 import glob
+import random
 import numpy as np
+from pathlib import Path
 from PIL import Image, ImageEnhance
 
-from megengine.data.dataset import Dataset
+from torch.utils.data.dataset import Dataset
 
 
 class Augmentor:
@@ -162,7 +164,14 @@ class Augmentor:
 class CREStereoDataset(Dataset):
     def __init__(self, root):
         super().__init__()
-        self.imgs = glob.glob(os.path.join(root, "**/*_left.jpg"), recursive=True)
+        self.root = root
+
+        if (Path(root) / 'files.txt').exists():  # glob takes forever
+            with (Path(root) / 'files.txt').open('r') as image_list_file:
+                self.imgs = [str(Path(root) / name.strip()) for name in image_list_file.readlines()]
+        else:
+            self.imgs = glob.glob(os.path.join(root, "**/*_left.jpg"), recursive=True)
+
         self.augmentor = Augmentor(
             image_height=384,
             image_width=512,
@@ -175,7 +184,7 @@ class CREStereoDataset(Dataset):
 
     def get_disp(self, path):
         disp = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-        return disp.astype(np.float32) / 32
+        return disp.astype(np.float32) / 32 if disp is not None else None
 
     def __getitem__(self, index):
         # find path
@@ -190,6 +199,16 @@ class CREStereoDataset(Dataset):
         right_img = cv2.imread(right_path, cv2.IMREAD_COLOR)
         left_disp = self.get_disp(left_disp_path)
         right_disp = self.get_disp(right_disp_path)
+
+        read_error = False
+        for name, content in ((left_path, left_img), (right_path, right_img), (left_disp_path, left_disp), (right_disp_path, right_disp)):
+            if content is None:
+                print(f'Could not load: {name} (index: {index})')
+                with (Path(self.root) / 'read_errors.txt').open('a') as error_log:
+                    error_log.write(f'{name}\n')
+                read_error = True
+        if read_error:
+            return self.__getitem__(random.randint(0, len(self.imgs)))  # not the prettiest fix admittedly
 
         if self.rng.binomial(1, 0.5):
             left_img, right_img = np.fliplr(right_img), np.fliplr(left_img)
