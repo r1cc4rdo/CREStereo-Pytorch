@@ -8,7 +8,7 @@ import yaml
 from tensorboardX import SummaryWriter
 
 from nets import Model
-from dataset import CREStereoDataset
+xfrom dataset import CREStereoDataset
 
 import torch
 import torch.nn as nn
@@ -92,7 +92,7 @@ def main(args):
     model = Model(max_disp=args.max_disp, mixed_precision=args.mixed_precision, test_mode=False)
     # summary(model, input_size=((args.batch_size, 3, args.image_height, args.image_width), )*2)
 
-    model = nn.DataParallel(model,device_ids=[i for i in range(world_size)])
+    model = nn.DataParallel(model, device_ids=[i for i in range(world_size)])
     model.cuda()
     optimizer = optim.Adam(model.parameters(), lr=0.1, betas=(0.9, 0.999))
     # model = nn.DataParallel(model,device_ids=[0])

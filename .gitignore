@@ -1,6 +1,7 @@
 .idea
 results
 models
+train_log
 output.jpg
 
 # Byte-compiled / optimized / DLL files
