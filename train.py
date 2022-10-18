@@ -7,7 +7,7 @@ from collections import namedtuple
 import yaml
 from tensorboardX import SummaryWriter
 
-from nets import Model
+from nets.nocorr import SweepStereo as Model
 from dataset import CREStereoDataset
 
 import torch
