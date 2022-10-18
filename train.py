@@ -8,7 +8,7 @@ import yaml
 from tensorboardX import SummaryWriter
 
 from nets import Model
-xfrom dataset import CREStereoDataset
+from dataset import CREStereoDataset
 
 import torch
 import torch.nn as nn
